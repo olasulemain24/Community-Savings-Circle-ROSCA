@@ -11,6 +11,11 @@
 (define-constant ERR-ALREADY-CLAIMED (err u110))
 (define-constant ERR-CYCLE-NOT-COMPLETE (err u111))
 
+(define-constant REPUTATION-CONTRIBUTION-BONUS u10)
+(define-constant REPUTATION-COMPLETION-BONUS u50)
+(define-constant REPUTATION-MISS-PENALTY u15)
+(define-constant REPUTATION-LEAVE-PENALTY u25)
+
 (define-data-var circle-counter uint u0)
 
 (define-map circles
@@ -400,3 +405,93 @@
   )
 )
 
+(define-map member-reputation
+  { member: principal }
+  {
+    total-circles: uint,
+    completed-circles: uint,
+    total-contributions: uint,
+    missed-contributions: uint,
+    reputation-score: uint,
+    last-updated: uint
+  }
+)
+
+(define-read-only (get-member-reputation (member principal))
+  (match (map-get? member-reputation { member: member })
+    rep-data rep-data
+    {
+      total-circles: u0,
+      completed-circles: u0,
+      total-contributions: u0,
+      missed-contributions: u0,
+      reputation-score: u100,
+      last-updated: u0
+    }
+  )
+)
+
+(define-read-only (calculate-reputation-score (member principal))
+  (let
+    (
+      (rep-data (get-member-reputation member))
+      (total-contrib (get total-contributions rep-data))
+      (missed-contrib (get missed-contributions rep-data))
+      (completed-circles (get completed-circles rep-data))
+      (total-circles (get total-circles rep-data))
+    )
+    (if (> total-contrib u0)
+      (let
+        (
+          (success-rate (/ (* completed-circles u100) total-circles))
+          (contrib-rate (/ (* (- total-contrib missed-contrib) u100) total-contrib))
+          (base-score (+ success-rate contrib-rate))
+        )
+        (if (> base-score u100) u100 base-score)
+      )
+      u100
+    )
+  )
+)
+
+(define-public (update-reputation-contribution (member principal) (circle-id uint))
+  (let
+    (
+      (current-rep (get-member-reputation member))
+      (new-score (+ (get reputation-score current-rep) REPUTATION-CONTRIBUTION-BONUS))
+      (new-contributions (+ (get total-contributions current-rep) u1))
+    )
+    (map-set member-reputation
+      { member: member }
+      (merge current-rep {
+        total-contributions: new-contributions,
+        reputation-score: (if (> new-score u1000) u1000 new-score),
+        last-updated: stacks-block-height
+      })
+    )
+    (ok true)
+  )
+)
+
+(define-public (penalize-reputation (member principal) (penalty-type uint))
+  (let
+    (
+      (current-rep (get-member-reputation member))
+      (penalty (if (is-eq penalty-type u1) REPUTATION-MISS-PENALTY REPUTATION-LEAVE-PENALTY))
+      (current-score (get reputation-score current-rep))
+      (new-score (if (> current-score penalty) (- current-score penalty) u0))
+    )
+    (map-set member-reputation
+      { member: member }
+      (merge current-rep {
+        missed-contributions: (if (is-eq penalty-type u1) 
+          (+ (get missed-contributions current-rep) u1) 
+          (get missed-contributions current-rep)
+        ),
+        reputation-score: new-score,
+        last-updated: stacks-block-height
+      })
+    )
+    (ok true)
+  )
+)
